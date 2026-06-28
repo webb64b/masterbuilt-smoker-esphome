@@ -1,0 +1,115 @@
+# Example ESPHome configuration for a Masterbuilt Bluetooth electric smoker.
+#
+# Before flashing:
+#   1. Replace the two BLE MAC addresses below with YOUR smoker's MAC (see the README
+#      for how to find it).
+#   2. Put your Wi-Fi credentials in a secrets.yaml next to this file:
+#        wifi_ssid: "your-network"
+#        wifi_password: "your-password"
+#   3. Flash once over USB, then put the smoker in pairing mode for first-time setup.
+#      After that it reconnects on its own (the identity is saved to flash).
+
+substitutions:
+  # Your smoker's Bluetooth MAC address (find it with the Masterbuilt app or an ESPHome
+  # bluetooth_proxy / scanner - it advertises as "Masterbuilt Smoker").
+  smoker_mac: "BC:33:AC:E0:E1:27"
+
+esphome:
+  name: masterbuilt-smoker
+  friendly_name: Masterbuilt Smoker
+  min_version: 2026.6.2
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+# Pull the smoker component straight from GitHub.
+external_components:
+  - source: github://webb64b/masterbuilt-smoker-esphome
+    components: [masterbuilt_smoker]
+
+# The smoker uses a plain, unencrypted BLE link (no bonding).
+esp32_ble:
+  io_capability: none
+
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 150ms
+    window: 60ms
+    active: true
+    continuous: true
+  on_ble_manufacturer_data_advertise:
+    - mac_address: ${smoker_mac}
+      manufacturer_id: "4842"
+      then:
+        - lambda: |-
+            // ESPHome strips the 2-byte company id, so this payload is usually 6 bytes when idle
+            // and 14 bytes in pairing mode (6-byte tail + 8-byte rotating code).
+            bool got_code = false;
+            if (!id(connect_started) && x.size() >= 14) {
+              static const uint8_t key[8] = {0x42, 0x48, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+              std::vector<uint8_t> payload(8);
+              const size_t off = x.size() - 8;
+              for (int i = 0; i < 8; i++) payload[i] = key[i] ^ x[off + i];
+              id(smoker).set_pair_payload(payload);
+              got_code = true;
+            }
+
+            // Only open a connection when we have something to authenticate with: a freshly
+            // captured pairing code, or a stored identity from a previous pairing. Until then we
+            // just listen, leaving the smoker free to broadcast its code while in pairing mode.
+            if (!id(connect_started) && (got_code || id(smoker).is_paired())) {
+              id(connect_started) = true;
+              id(smoker_client).connect();
+            }
+
+globals:
+  - id: connect_started
+    type: bool
+    restore_value: no
+    initial_value: "false"
+
+ble_client:
+  - mac_address: ${smoker_mac}
+    id: smoker_client
+    auto_connect: false
+    on_disconnect:
+      then:
+        # Allow a reconnect on the next advertisement (the trigger above gates on is_paired()).
+        - delay: 1200ms
+        - lambda: "id(connect_started) = false;"
+
+masterbuilt_smoker:
+  id: smoker
+  ble_client_id: smoker_client
+  chamber_temperature:
+    name: "Chamber Temperature"
+  target_temperature:
+    name: "Target Temperature"
+  cook_time:
+    name: "Cook Time"
+  time_remaining:
+    name: "Time Remaining"
+  forget_pairing:
+    name: "Forget Saved Smoker Pairing"
+  probe_1:
+    name: "Meat Probe 1"
+  probe_2:
+    name: "Meat Probe 2"
+  probe_3:
+    name: "Meat Probe 3"
+  probe_4:
+    name: "Meat Probe 4"
