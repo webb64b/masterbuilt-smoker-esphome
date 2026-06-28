@@ -77,9 +77,12 @@ appears. Without that retry, first-time pairing fails intermittently.
 
 ### Advertisement / pairing-code note
 
-The pairing code lives in the smoker's BLE manufacturer advertisement (company id `0x4842`). When
-ESPHome parses the advertisement it strips the 2-byte company id, so the manufacturer payload it
-hands you is **6 bytes when idle** and **14 bytes in pairing mode** (a 6-byte tail + the 8-byte
+The smoker advertises BLE manufacturer data with company id `0x4842`, both idle and in pairing
+mode. The component uses that advertisement to discover the smoker's Bluetooth address at runtime.
+
+The pairing code also lives in that manufacturer advertisement while the smoker is in pairing mode.
+When ESPHome parses the advertisement it strips the 2-byte company id, so the manufacturer payload
+it hands you is **6 bytes when idle** and **14 bytes in pairing mode** (a 6-byte tail + the 8-byte
 rotating code). The code is the last 8 bytes; XOR it with `MAC_KEY` to form the round-1 write.
 
 ## Telemetry frames (fff4 notifications)

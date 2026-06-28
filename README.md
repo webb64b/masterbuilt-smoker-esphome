@@ -33,21 +33,13 @@ documented in [`docs/protocol.md`](docs/protocol.md).
 - An **ESP32** dev board (any common `esp32dev` board works) — kept within Bluetooth range of the
   smoker and powered by USB.
 - [ESPHome](https://esphome.io/guides/installing_esphome.html) (the Home Assistant add-on is easiest).
-- Your smoker's **Bluetooth MAC address** (see below).
 
 ## Setup
 
-### 1. Find your smoker's BLE MAC
+### 1. Create your config
 
-Put the smoker in **pairing mode** (the pairing button on the control panel). With a BLE scanner —
-[nRF Connect](https://www.nordicsemi.com/Products/Development-tools/nRF-Connect-for-mobile) on a
-phone, or an ESPHome `bluetooth_proxy` — look for a device advertising as **"Masterbuilt Smoker"**
-and note its MAC address (it's stable, e.g. `BC:33:AC:E0:E1:27`).
-
-### 2. Create your config
-
-Copy [`smoker.example.yaml`](smoker.example.yaml), set `smoker_mac` to your smoker's MAC, and add a
-`secrets.yaml` with your Wi-Fi credentials. The config pulls this component straight from GitHub:
+Copy [`smoker.example.yaml`](smoker.example.yaml) and add a `secrets.yaml` with your Wi-Fi
+credentials. The config pulls this component straight from GitHub:
 
 ```yaml
 external_components:
@@ -55,10 +47,11 @@ external_components:
     components: [masterbuilt_smoker]
 ```
 
-### 3. Flash and pair (one time)
+### 2. Flash and pair (one time)
 
 Flash the ESP32 over USB. Then put the smoker in **pairing mode** once while the ESP32 is running —
-it captures the pairing code, completes the handshake, and **saves the smoker's identity to flash**.
+it discovers the smoker, captures the pairing code, completes the handshake, and **saves the
+smoker's identity to flash**.
 
 From then on the ESP32 reconnects on its own — after a reboot, a power cycle, anything — with **no
 pairing button**, exactly like the phone app's "connect." You only pair again if you reset the
@@ -77,6 +70,18 @@ device or move it to a different smoker.
 The smoker identity is saved in ESPHome preferences after first pairing. If you move the ESP32 to a
 different smoker, press the **Forget Saved Smoker Pairing** button in Home Assistant, then put the new
 smoker in pairing mode while the ESP32 is running.
+
+### Optional: pin a specific smoker
+
+By default the ESP32 locks onto the first compatible smoker advertisement it sees. If more than one
+compatible smoker is in Bluetooth range, set `smoker_mac` under `masterbuilt_smoker`:
+
+```yaml
+masterbuilt_smoker:
+  id: smoker
+  ble_client_id: smoker_client
+  smoker_mac: BC:33:AC:E0:E1:27
+```
 
 ## Sensors exposed
 

@@ -1,6 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import ble_client, button, sensor
+from esphome.components import ble_client, button, esp32_ble_tracker, sensor
 from esphome.const import (
     CONF_ID,
     DEVICE_CLASS_TEMPERATURE,
@@ -15,7 +15,10 @@ AUTO_LOAD = ["button", "sensor"]
 
 masterbuilt_smoker_ns = cg.esphome_ns.namespace("masterbuilt_smoker")
 MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
-    "MasterbuiltSmoker", cg.Component, ble_client.BLEClientNode
+    "MasterbuiltSmoker",
+    cg.Component,
+    ble_client.BLEClientNode,
+    esp32_ble_tracker.ESPBTDeviceListener,
 )
 ForgetPairingButton = masterbuilt_smoker_ns.class_("ForgetPairingButton", button.Button)
 
@@ -24,6 +27,7 @@ CONF_TARGET_TEMPERATURE = "target_temperature"
 CONF_COOK_TIME = "cook_time"
 CONF_TIME_REMAINING = "time_remaining"
 CONF_FORGET_PAIRING = "forget_pairing"
+CONF_SMOKER_MAC = "smoker_mac"
 CONF_PROBES = ["probe_1", "probe_2", "probe_3", "probe_4"]
 
 
@@ -52,6 +56,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_TARGET_TEMPERATURE): _temperature_schema(),
             cv.Optional(CONF_COOK_TIME): _minutes_schema(),
             cv.Optional(CONF_TIME_REMAINING): _minutes_schema(),
+            cv.Optional(CONF_SMOKER_MAC): cv.mac_address,
             cv.Optional(CONF_FORGET_PAIRING): button.button_schema(
                 ForgetPairingButton,
                 icon="mdi:bluetooth-off",
@@ -62,6 +67,7 @@ CONFIG_SCHEMA = (
     )
     .extend(cv.COMPONENT_SCHEMA)
     .extend(ble_client.BLE_CLIENT_SCHEMA)
+    .extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA)
 )
 
 
@@ -69,7 +75,10 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await ble_client.register_ble_node(var, config)
+    await esp32_ble_tracker.register_ble_device(var, config)
 
+    if CONF_SMOKER_MAC in config:
+        cg.add(var.set_smoker_address(config[CONF_SMOKER_MAC].as_hex))
     if CONF_CHAMBER_TEMPERATURE in config:
         cg.add(var.set_chamber_temperature(await sensor.new_sensor(config[CONF_CHAMBER_TEMPERATURE])))
     if CONF_TARGET_TEMPERATURE in config:

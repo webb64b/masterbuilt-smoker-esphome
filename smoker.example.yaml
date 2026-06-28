@@ -1,18 +1,11 @@
 # Example ESPHome configuration for a Masterbuilt Bluetooth electric smoker.
 #
 # Before flashing:
-#   1. Replace the two BLE MAC addresses below with YOUR smoker's MAC (see the README
-#      for how to find it).
-#   2. Put your Wi-Fi credentials in a secrets.yaml next to this file:
+#   1. Put your Wi-Fi credentials in a secrets.yaml next to this file:
 #        wifi_ssid: "your-network"
 #        wifi_password: "your-password"
-#   3. Flash once over USB, then put the smoker in pairing mode for first-time setup.
+#   2. Flash once over USB, then put the smoker in pairing mode for first-time setup.
 #      After that it reconnects on its own (the identity is saved to flash).
-
-substitutions:
-  # Your smoker's Bluetooth MAC address (find it with the Masterbuilt app or an ESPHome
-  # bluetooth_proxy / scanner - it advertises as "Masterbuilt Smoker").
-  smoker_mac: "BC:33:AC:E0:E1:27"
 
 esphome:
   name: masterbuilt-smoker
@@ -51,50 +44,19 @@ esp32_ble_tracker:
     window: 60ms
     active: true
     continuous: true
-  on_ble_manufacturer_data_advertise:
-    - mac_address: ${smoker_mac}
-      manufacturer_id: "4842"
-      then:
-        - lambda: |-
-            // ESPHome strips the 2-byte company id, so this payload is usually 6 bytes when idle
-            // and 14 bytes in pairing mode (6-byte tail + 8-byte rotating code).
-            bool got_code = false;
-            if (!id(connect_started) && x.size() >= 14) {
-              static const uint8_t key[8] = {0x42, 0x48, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
-              std::vector<uint8_t> payload(8);
-              const size_t off = x.size() - 8;
-              for (int i = 0; i < 8; i++) payload[i] = key[i] ^ x[off + i];
-              id(smoker).set_pair_payload(payload);
-              got_code = true;
-            }
-
-            // Only open a connection when we have something to authenticate with: a freshly
-            // captured pairing code, or a stored identity from a previous pairing. Until then we
-            // just listen, leaving the smoker free to broadcast its code while in pairing mode.
-            if (!id(connect_started) && (got_code || id(smoker).is_paired())) {
-              id(connect_started) = true;
-              id(smoker_client).connect();
-            }
-
-globals:
-  - id: connect_started
-    type: bool
-    restore_value: no
-    initial_value: "false"
 
 ble_client:
-  - mac_address: ${smoker_mac}
+  # ESPHome requires a BLE client address in YAML. The component replaces this placeholder
+  # at runtime after it discovers the smoker's 0x4842 manufacturer advertisement.
+  - mac_address: 00:00:00:00:00:00
     id: smoker_client
     auto_connect: false
-    on_disconnect:
-      then:
-        # Allow a reconnect on the next advertisement (the trigger above gates on is_paired()).
-        - delay: 1200ms
-        - lambda: "id(connect_started) = false;"
 
 masterbuilt_smoker:
   id: smoker
   ble_client_id: smoker_client
+  # Optional: uncomment this if more than one compatible smoker is in Bluetooth range.
+  # smoker_mac: BC:33:AC:E0:E1:27
   chamber_temperature:
     name: "Chamber Temperature"
   target_temperature:

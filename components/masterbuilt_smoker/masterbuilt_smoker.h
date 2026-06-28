@@ -2,6 +2,7 @@
 
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/button/button.h"
+#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
@@ -58,14 +59,22 @@ class ForgetPairingButton : public button::Button {
 //
 // Once the grill_half is known it is saved to flash, so after a reboot the device skips
 // straight to round 2 and reconnects with no pairing button (like the phone app's reconnect).
-class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
+class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, public esp32_ble_tracker::ESPBTDeviceListener {
  public:
   void dump_config() override { ESP_LOGCONFIG(TAG, "Masterbuilt Smoker BLE client"); }
+  float get_setup_priority() const override { return setup_priority::AFTER_BLUETOOTH; }
 
   void setup() override {
+    if (this->configured_address_ != 0) {
+      this->lock_address_(this->configured_address_, BLE_ADDR_TYPE_PUBLIC, 0, true);
+    }
+
     this->pref_ = global_preferences->make_preference<StoredIdentity>(GRILL_HALF_PREF);
     StoredIdentity saved{};
-    if (this->pref_.load(&saved) && this->validate_identity_(saved)) {
+    if (this->pref_.load(&saved) && this->validate_identity_record_(saved) &&
+        (this->configured_address_ == 0 || saved.smoker_address == this->configured_address_)) {
+      if (this->locked_address_ == 0)
+        this->lock_address_(saved.smoker_address, BLE_ADDR_TYPE_PUBLIC, 0, false);
       this->grill_half_ = saved.grill_half;
       this->have_grill_half_ = true;
       this->do_round2_ = true;
@@ -78,11 +87,14 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
   // True once we know this smoker's identity, i.e. we can reconnect without the pairing button.
   bool is_paired() const { return this->have_grill_half_; }
 
+  void set_smoker_address(uint64_t address) { this->configured_address_ = address; }
+
   void forget_pairing() {
     ESP_LOGI(TAG, "Forgetting stored smoker pairing");
     this->have_pair_payload_ = false;
     this->have_grill_half_ = false;
     this->do_round2_ = false;
+    this->connect_started_ = false;
     this->pair_payload_.fill(0);
     this->grill_half_.fill(0);
     this->reset_session_();
@@ -100,6 +112,45 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
     }
 
     this->parent()->disconnect();
+  }
+
+  bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override {
+    const uint64_t address = device.address_uint64();
+    if (this->configured_address_ != 0 && address != this->configured_address_)
+      return false;
+    if (this->locked_address_ != 0 && address != this->locked_address_)
+      return false;
+
+    const std::vector<uint8_t> *manufacturer_payload = nullptr;
+    for (const auto &manufacturer_data : device.get_manufacturer_datas()) {
+      if (manufacturer_data.uuid == esp32_ble_tracker::ESPBTUUID::from_uint16(COMPANY_ID)) {
+        manufacturer_payload = &manufacturer_data.data;
+        break;
+      }
+    }
+    if (manufacturer_payload == nullptr)
+      return false;
+
+    if (this->locked_address_ == 0)
+      this->lock_address_(address, device.get_address_type(), device.get_rssi(), false);
+    else
+      this->parent()->set_remote_addr_type(device.get_address_type());
+
+    bool got_code = false;
+    if (!this->connect_started_ && manufacturer_payload->size() >= 14) {
+      std::vector<uint8_t> payload(8);
+      const size_t off = manufacturer_payload->size() - 8;
+      for (int i = 0; i < 8; i++)
+        payload[i] = MAC_KEY[i] ^ (*manufacturer_payload)[off + i];
+      this->set_pair_payload(payload);
+      got_code = true;
+    }
+
+    if (!this->connect_started_ && (got_code || this->is_paired())) {
+      this->connect_started_ = true;
+      this->parent()->connect();
+    }
+    return true;
   }
 
   void set_chamber_temperature(sensor::Sensor *s) { this->chamber_temp_ = s; }
@@ -210,6 +261,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
       case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGI(TAG, "Disconnected");
         this->reset_session_();  // grill_half_ / pairing state are kept
+        this->set_timeout("connect_gate", 1200, [this]() { this->connect_started_ = false; });
         break;
 
       default:
@@ -222,6 +274,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
   static constexpr uint32_t GRILL_HALF_PREF = 0x4D425348;  // "MBSH"
   static constexpr uint32_t IDENTITY_MAGIC = 0x4D425349;    // "MBSI"
   static constexpr uint8_t IDENTITY_VERSION = 1;
+  static constexpr uint16_t COMPANY_ID = 0x4842;
   static constexpr uint16_t FFF1_HANDLE = 0x0025;
   static constexpr uint16_t FFF2_HANDLE = 0x0027;
   static constexpr uint16_t FFF4_HANDLE = 0x002b;
@@ -253,8 +306,11 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
   bool have_pair_payload_{false};
   bool have_grill_half_{false};
   bool do_round2_{false};
+  bool connect_started_{false};
   uint8_t fff2_retries_{0};
   uint32_t session_id_{0};
+  uint64_t configured_address_{0};
+  uint64_t locked_address_{0};
   std::array<uint8_t, 8> pair_payload_{};
   std::array<uint8_t, 8> grill_half_{};
   ESPPreferenceObject pref_;
@@ -264,6 +320,17 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
   sensor::Sensor *cook_time_{nullptr};
   sensor::Sensor *time_remaining_{nullptr};
   sensor::Sensor *probes_[4]{nullptr, nullptr, nullptr, nullptr};
+
+  void lock_address_(uint64_t address, esp_ble_addr_type_t address_type, int rssi, bool configured) {
+    this->locked_address_ = address;
+    this->parent()->set_address(address);
+    this->parent()->set_remote_addr_type(address_type);
+    if (configured) {
+      ESP_LOGI(TAG, "Pinned smoker address %s", this->parent()->address_str());
+    } else {
+      ESP_LOGI(TAG, "Discovered smoker %s (RSSI %d)", this->parent()->address_str(), rssi);
+    }
+  }
 
   void write_keyed_(const std::array<uint8_t, 8> &secret, Step next) {
     uint8_t out[10] = {0x0e, 0x08};
@@ -464,6 +531,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
   void fail_and_disconnect_(const char *reason) {
     ESP_LOGW(TAG, "%s; disconnecting", reason);
     this->reset_session_();
+    this->set_timeout("connect_gate", 1200, [this]() { this->connect_started_ = false; });
     this->parent()->disconnect();
   }
 
@@ -493,14 +561,18 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode {
     return h;
   }
 
-  bool validate_identity_(const StoredIdentity &identity) {
+  bool validate_identity_record_(const StoredIdentity &identity) {
     if (identity.magic != IDENTITY_MAGIC || identity.version != IDENTITY_VERSION)
       return false;
-    if (identity.smoker_address != this->parent()->get_address())
+    if (identity.smoker_address == 0)
       return false;
     if (invalid_identity_bytes_(identity.grill_half))
       return false;
     return identity.checksum == this->identity_checksum_(identity);
+  }
+
+  bool validate_identity_(const StoredIdentity &identity) {
+    return this->validate_identity_record_(identity) && identity.smoker_address == this->parent()->get_address();
   }
 
   void log_bytes_(int level, const char *label, const uint8_t *value, uint16_t len) {
