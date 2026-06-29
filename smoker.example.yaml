@@ -79,6 +79,8 @@ masterbuilt_smoker:
   # --- Control (optional) ---
   # These actually drive the smoker. Read the safety note in the README before using them.
   # The smoker (bottom) and broiler (top) are mutually exclusive: turning broil on turns smoke off.
+  power:
+    name: "Power"           # master panel power (on = ready/idle, the elements are what heat)
   climate:
     name: "Smoker"          # off / heat, with a target temperature
   broil:

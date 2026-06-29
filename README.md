@@ -104,6 +104,7 @@ of the config and it stays read-only.
 
 | Control | What it does |
 | --- | --- |
+| Power (switch) | Master power. On brings the panel up to idle/ready; off shuts it down. |
 | Smoker (climate) | Off / Heat with an adjustable target temp. The bottom (smoke) element. |
 | Broil (select) | Off / Low / Medium / High. The top (broiler) element. |
 | Cook Timer (number) | Cook time in minutes |
@@ -116,11 +117,54 @@ turning broil on turns the smoke off (the climate reads Off), and turning the cl
 off. The broiler is a Low/Medium/High level, not a free temperature, because that's all the smoker
 accepts over Bluetooth.
 
+The smoker has no "stop the heat but stay powered" command over Bluetooth. The phone app stops a cook by
+powering the smoker off, and so does this component. Turning the climate (or broil) off powers the
+smoker down; turn Power back on to get to idle. Temperatures only report while the smoker is powered,
+so an off smoker shows no reading rather than a stale leftover number.
+
 > Safety: these controls really do power the smoker on, set its temperature, and run the broiler. The
 > smoker has its own door interlock and won't start heating with the door open, and this component
 > leaves that to the smoker rather than second-guessing it. Don't treat Home Assistant as a safety
 > interlock or a substitute for watching the smoker. The Bluetooth link is unencrypted, so keep the
 > ESP32 somewhere you trust.
+
+## Dashboard card
+
+There's an optional Lovelace card in [`card/`](card) that folds these entities into one panel: a power
+button when the smoker is off, and the full controls (temperature, smoke/broil, probes, timer, door)
+when it's on.
+
+Add the file as a dashboard resource, either from a CDN:
+
+```yaml
+# Settings > Dashboards > Resources > Add resource, as a JavaScript Module:
+url: https://cdn.jsdelivr.net/gh/webb64b/masterbuilt-smoker-esphome@main/card/masterbuilt-smoker-card.js
+```
+
+or by copying `card/masterbuilt-smoker-card.js` into `config/www/` and using
+`/local/masterbuilt-smoker-card.js`.
+
+Then add the card to a dashboard. Only `climate` is required, so leaving things out (no broil, fewer
+probes) just makes a smaller card. Use your own entity IDs:
+
+```yaml
+type: custom:masterbuilt-smoker-card
+name: Smoker
+power: switch.masterbuilt_smoker_power
+climate: climate.masterbuilt_smoker_smoker
+broil: select.masterbuilt_smoker_broil
+cook_timer: number.masterbuilt_smoker_cook_timer
+time_remaining: sensor.masterbuilt_smoker_time_remaining
+door: binary_sensor.masterbuilt_smoker_door
+temperature_error: binary_sensor.masterbuilt_smoker_temperature_error
+probes:
+  - sensor: sensor.masterbuilt_smoker_meat_probe_1
+    target: number.masterbuilt_smoker_probe_1_target
+    name: Probe 1
+```
+
+The power button drives the master power, the Smoke and Broil buttons start those elements (tap the
+other to switch), and tapping the running element or the power button stops the cook by powering off.
 
 ## How it works
 

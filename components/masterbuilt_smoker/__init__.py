@@ -9,6 +9,7 @@ from esphome.components import (
     number,
     select,
     sensor,
+    switch,
 )
 from esphome.const import (
     CONF_ID,
@@ -23,7 +24,7 @@ from esphome.const import (
 
 CODEOWNERS = ["@webb64b"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["binary_sensor", "button", "climate", "number", "select", "sensor"]
+AUTO_LOAD = ["binary_sensor", "button", "climate", "number", "select", "sensor", "switch"]
 
 masterbuilt_smoker_ns = cg.esphome_ns.namespace("masterbuilt_smoker")
 MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
@@ -37,6 +38,7 @@ SmokerClimate = masterbuilt_smoker_ns.class_("SmokerClimate", climate.Climate)
 SmokerBroilSelect = masterbuilt_smoker_ns.class_("SmokerBroilSelect", select.Select)
 SmokerCookTimeNumber = masterbuilt_smoker_ns.class_("SmokerCookTimeNumber", number.Number)
 SmokerProbeTargetNumber = masterbuilt_smoker_ns.class_("SmokerProbeTargetNumber", number.Number)
+SmokerPowerSwitch = masterbuilt_smoker_ns.class_("SmokerPowerSwitch", switch.Switch)
 BROIL_OPTIONS = ["Off", "Low", "Medium", "High"]
 
 CONF_CHAMBER_TEMPERATURE = "chamber_temperature"
@@ -49,6 +51,7 @@ CONF_PROBES = ["probe_1", "probe_2", "probe_3", "probe_4"]
 CONF_DOOR = "door"
 CONF_TEMPERATURE_ERROR = "temperature_error"
 CONF_CLIMATE = "climate"
+CONF_POWER = "power"
 CONF_BROIL = "broil"
 CONF_COOK_TIMER = "cook_timer"
 CONF_PROBE_TARGET = "probe_target"
@@ -92,6 +95,11 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_TEMPERATURE_ERROR): binary_sensor.binary_sensor_schema(
                 device_class=DEVICE_CLASS_PROBLEM,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
+            cv.Optional(CONF_POWER): switch.switch_schema(
+                SmokerPowerSwitch,
+                icon="mdi:power",
+                default_restore_mode="DISABLED",
             ),
             cv.Optional(CONF_CLIMATE): climate.climate_schema(SmokerClimate),
             cv.Optional(CONF_BROIL): select.select_schema(
@@ -140,6 +148,10 @@ async def to_code(config):
         cg.add(var.set_door_sensor(await binary_sensor.new_binary_sensor(config[CONF_DOOR])))
     if CONF_TEMPERATURE_ERROR in config:
         cg.add(var.set_temp_error_sensor(await binary_sensor.new_binary_sensor(config[CONF_TEMPERATURE_ERROR])))
+    if CONF_POWER in config:
+        power = await switch.new_switch(config[CONF_POWER])
+        cg.add(power.set_parent(var))
+        cg.add(var.set_power_switch(power))
     if CONF_CLIMATE in config:
         climate_conf = config[CONF_CLIMATE]
         climate_var = cg.new_Pvariable(climate_conf[CONF_ID])
