@@ -152,13 +152,6 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
       ESP_LOGI(TAG, "No stored pairing yet - put the smoker in pairing mode for first-time setup");
     }
 
-    // Give the optimistic control numbers a starting value so they don't read 'unknown' before use.
-    this->set_timeout("init_numbers", 200, [this]() {
-      if (this->cook_time_number_ != nullptr && std::isnan(this->cook_time_number_->state))
-        this->cook_time_number_->publish_state(0);
-      if (this->probe_target_number_ != nullptr && std::isnan(this->probe_target_number_->state))
-        this->probe_target_number_->publish_state(0);
-    });
   }
 
   // True once we know this smoker's identity, i.e. we can reconnect without the pairing button.
@@ -475,6 +468,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   DesiredState desired_{};
   bool desired_seeded_{false};
   bool smoker_fahrenheit_{true};
+  bool numbers_initialized_{false};
 
   void lock_address_(uint64_t address, esp_ble_addr_type_t address_type, int rssi, bool configured) {
     this->locked_address_ = address;
@@ -752,6 +746,14 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
       if (!this->desired_seeded_) {
         this->seed_desired_from_b2_(v, len);
         this->publish_broil_select_();
+      }
+      // Default the optimistic control numbers once so they read 0 instead of 'unknown' before use.
+      if (!this->numbers_initialized_) {
+        this->numbers_initialized_ = true;
+        if (this->cook_time_number_ != nullptr)
+          this->cook_time_number_->publish_state(0);
+        if (this->probe_target_number_ != nullptr)
+          this->probe_target_number_->publish_state(0);
       }
       const bool cooking = ((v[2] >> 2) & 0x01) != 0;  // smoke/heat element
       if (this->climate_ != nullptr) {
