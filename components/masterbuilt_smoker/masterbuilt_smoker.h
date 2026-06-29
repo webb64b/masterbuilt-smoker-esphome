@@ -5,6 +5,8 @@
 #include "esphome/components/button/button.h"
 #include "esphome/components/climate/climate.h"
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
+#include "esphome/components/number/number.h"
+#include "esphome/components/select/select.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/core/component.h"
 #include "esphome/core/hal.h"
@@ -70,6 +72,39 @@ class SmokerClimate : public climate::Climate {
   float min_f_{100.0f};
   float max_f_{320.0f};
   float step_f_{5.0f};
+};
+
+// Broil (top element): Off / Low / Medium / High, mapping to broil levels 0-3.
+class SmokerBroilSelect : public select::Select {
+ public:
+  void set_parent(MasterbuiltSmoker *parent) { this->parent_ = parent; }
+
+ protected:
+  void control(const std::string &value) override;
+
+  MasterbuiltSmoker *parent_{nullptr};
+};
+
+// Cook timer in minutes; the value rides along on the next settings write.
+class SmokerCookTimeNumber : public number::Number {
+ public:
+  void set_parent(MasterbuiltSmoker *parent) { this->parent_ = parent; }
+
+ protected:
+  void control(float value) override;
+
+  MasterbuiltSmoker *parent_{nullptr};
+};
+
+// Meat-probe target temperature (degrees F); sent as the 0xA3 probe command.
+class SmokerProbeTargetNumber : public number::Number {
+ public:
+  void set_parent(MasterbuiltSmoker *parent) { this->parent_ = parent; }
+
+ protected:
+  void control(float value) override;
+
+  MasterbuiltSmoker *parent_{nullptr};
 };
 
 // The smoker speaks a two-round challenge/response over a plain (unencrypted) GATT link.
@@ -198,16 +233,56 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   void set_door_sensor(binary_sensor::BinarySensor *s) { this->door_sensor_ = s; }
   void set_temp_error_sensor(binary_sensor::BinarySensor *s) { this->temp_error_sensor_ = s; }
   void set_climate(SmokerClimate *c) { this->climate_ = c; }
+  void set_broil_select(SmokerBroilSelect *s) { this->broil_select_ = s; }
+  void set_cook_time_number(SmokerCookTimeNumber *n) { this->cook_time_number_ = n; }
+  void set_probe_target_number(SmokerProbeTargetNumber *n) { this->probe_target_number_ = n; }
+
+  // Probe target alarm temperature (degrees F) via the 0xA3 command, probe 1.
+  void on_probe_target(uint16_t temp_f) {
+    if (!this->session_active_ || this->step_ != Step::R2_CCCD_SENT) {
+      ESP_LOGW(TAG, "Smoker not streaming; ignoring probe target");
+      return;
+    }
+    uint8_t cmd[10] = {0xA3, 0x01, (uint8_t) (temp_f & 0xFF), (uint8_t) (temp_f >> 8), 0, 0, 0, 0, 0, 0};
+    this->log_bytes_(ESP_LOG_INFO, "Write fff3 probe target", cmd, sizeof(cmd));
+    this->write_char_(FFF3_HANDLE, cmd, sizeof(cmd));
+  }
 
   // Called by SmokerClimate::control. Updates the desired power/target and pushes a settings write.
   // The smoker enforces its own door interlock (it refuses to heat with the door open), so we send
   // the command unconditionally and let the smoker be the authority.
   void on_climate_control(const climate::ClimateCall &call) {
     DesiredState next = this->desired_;
-    if (call.get_mode().has_value())
-      next.power_on = (*call.get_mode() == climate::CLIMATE_MODE_HEAT);
+    if (call.get_mode().has_value()) {
+      next.smoke_on = (*call.get_mode() == climate::CLIMATE_MODE_HEAT);
+      if (next.smoke_on)
+        next.broil_level = 0;  // smoke and broil are mutually exclusive
+    }
     if (call.get_target_temperature().has_value())
       next.target_temp = this->to_smoker_temp_(*call.get_target_temperature());
+    this->apply_desired_(next);
+  }
+
+  // Called by SmokerBroilSelect. Picking a broil level turns the smoke element off.
+  void on_broil_select(const std::string &value) {
+    DesiredState next = this->desired_;
+    if (value == "Low")
+      next.broil_level = 1;
+    else if (value == "Medium")
+      next.broil_level = 2;
+    else if (value == "High")
+      next.broil_level = 3;
+    else
+      next.broil_level = 0;
+    if (next.broil_level > 0)
+      next.smoke_on = false;
+    this->apply_desired_(next);
+  }
+
+  // Called by the cook-timer number; the time rides along on the next settings write.
+  void on_cook_time(uint16_t minutes) {
+    DesiredState next = this->desired_;
+    next.cook_time = minutes;
     this->apply_desired_(next);
   }
 
@@ -373,16 +448,20 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   binary_sensor::BinarySensor *door_sensor_{nullptr};
   binary_sensor::BinarySensor *temp_error_sensor_{nullptr};
   SmokerClimate *climate_{nullptr};
+  SmokerBroilSelect *broil_select_{nullptr};
+  SmokerCookTimeNumber *cook_time_number_{nullptr};
+  SmokerProbeTargetNumber *probe_target_number_{nullptr};
   bool door_open_{false};
 
   // The 0xA1 settings command is full-state (it carries power, temp, time and broil together), so
   // we keep the intended state and resend the whole command on any change. Seeded from the first
-  // status frame so a single control never clobbers the others.
+  // status frame so a single control never clobbers the others. The smoke (bottom) and broil (top)
+  // elements are mutually exclusive, exactly as the app and panel treat them.
   struct DesiredState {
-    bool power_on{false};
+    bool smoke_on{false};
     uint16_t target_temp{225};
     uint16_t cook_time{0};
-    uint8_t broil_level{0};
+    uint8_t broil_level{0};  // 0=off, 1=Low, 2=Medium, 3=High
     bool fahrenheit{true};
   };
   DesiredState desired_{};
@@ -569,27 +648,32 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   // broil level before).
   void seed_desired_from_b2_(const uint8_t *v, uint16_t len) {
     this->desired_.fahrenheit = ((v[1] >> 0) & 0x01) != 0;
-    this->desired_.power_on = ((v[2] >> 0) & 0x01) != 0;
+    this->desired_.smoke_on = ((v[2] >> 2) & 0x01) != 0;  // cook/heat element (not master power)
     if ((v[1] >> 5) & 0x01)
       this->desired_.target_temp = sfloat_(v, len, 13);
     if ((v[1] >> 4) & 0x01)
       this->desired_.cook_time = sfloat_(v, len, 11);
-    this->desired_.broil_level = (((v[1] >> 6) & 0x01) && len > 15) ? v[15] : 0;
+    this->desired_.broil_level = (((v[2] >> 5) & 0x01) && ((v[1] >> 6) & 0x01) && len > 15) ? v[15] : 0;
     this->desired_seeded_ = true;
   }
 
   void build_settings_command_(uint8_t *out) const {
-    const bool power = this->desired_.power_on;
-    const bool broil = power && this->desired_.broil_level > 0;
+    // Broil and smoke are mutually exclusive; broil wins if both are somehow set. Either element
+    // being on implies master power.
+    const bool broil = this->desired_.broil_level > 0;
+    const bool smoke = this->desired_.smoke_on && !broil;
+    const bool power = smoke || broil;
     uint8_t f1 = this->desired_.fahrenheit ? 0x01 : 0x00;
     uint8_t f2 = 0x00;
-    if (power) {
-      f1 |= 0x06;  // smoker/heat element on (bits 1 and 2)
-      f2 |= 0x05;  // power (bit 0) + cook active (bit 2)
+    if (power)
+      f2 |= 0x01;  // master power (bit 0)
+    if (smoke) {
+      f1 |= 0x06;  // smoke/heat element on (bits 1 and 2)
+      f2 |= 0x04;  // cook active (bit 2)
     }
     if (broil) {
-      f1 |= 0x08;
-      f2 |= 0x08;
+      f1 |= 0x08;  // broil (bit 3)
+      f2 |= 0x08;  // broil (bit 3)
     }
     out[0] = 0xA1;
     out[1] = f1;
@@ -598,7 +682,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     out[4] = (this->desired_.cook_time >> 8) & 0xFF;
     out[5] = this->desired_.target_temp & 0xFF;
     out[6] = (this->desired_.target_temp >> 8) & 0xFF;
-    out[7] = power ? this->desired_.broil_level : 0;
+    out[7] = broil ? this->desired_.broil_level : 0;
   }
 
   // Write the desired state as a settings command. Only sent while streaming; otherwise the control
@@ -636,6 +720,8 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->target_temp_->publish_state(set_temp);
       if (this->cook_time_ != nullptr)
         this->cook_time_->publish_state(set_min);
+      if (this->cook_time_number_ != nullptr)
+        this->cook_time_number_->publish_state(set_min);
       if (this->time_remaining_ != nullptr)
         this->time_remaining_->publish_state(remain);
       // Leading status flags: v[1] unit, v[2] control (bit0 power, bit2 heat, bit3 door),
@@ -648,19 +734,24 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->temp_error_sensor_->publish_state(((v[3] >> 0) & 0x01) != 0);
       if (!this->desired_seeded_)
         this->seed_desired_from_b2_(v, len);
+      const bool cooking = ((v[2] >> 2) & 0x01) != 0;   // smoke/heat element
+      const bool broiling = ((v[2] >> 5) & 0x01) != 0;  // broil element
       if (this->climate_ != nullptr) {
-        const bool power = ((v[2] >> 0) & 0x01) != 0;
-        const bool heating = ((v[2] >> 2) & 0x01) != 0;
         this->climate_->current_temperature = this->to_climate_temp_(chamber);
         // When no cook is set the smoker reports a 0 set-point, which converts to a target below the
         // climate's minimum and breaks Home Assistant's set_temperature. Fall back to the desired
         // target so the reported value always stays inside the visual range.
         uint16_t shown_target = (set_temp > 0) ? set_temp : this->desired_.target_temp;
         this->climate_->target_temperature = this->to_climate_temp_(shown_target);
-        this->climate_->mode = power ? climate::CLIMATE_MODE_HEAT : climate::CLIMATE_MODE_OFF;
-        this->climate_->action = heating ? climate::CLIMATE_ACTION_HEATING
-                                         : (power ? climate::CLIMATE_ACTION_IDLE : climate::CLIMATE_ACTION_OFF);
+        // Mode follows the smoke/cook element, so the climate reads OFF while broiling.
+        this->climate_->mode = cooking ? climate::CLIMATE_MODE_HEAT : climate::CLIMATE_MODE_OFF;
+        this->climate_->action = cooking ? climate::CLIMATE_ACTION_HEATING : climate::CLIMATE_ACTION_OFF;
         this->climate_->publish_state();
+      }
+      if (this->broil_select_ != nullptr) {
+        uint8_t blevel = (broiling && ((v[1] >> 6) & 0x01) && len > 15) ? v[15] : 0;
+        const char *opt = blevel == 1 ? "Low" : blevel == 2 ? "Medium" : blevel == 3 ? "High" : "Off";
+        this->broil_select_->publish_state(opt);
       }
     } else if (len >= 2 && v[0] == 0xb3) {
       uint8_t flags = v[1];
@@ -759,6 +850,24 @@ inline void ForgetPairingButton::press_action() {
 inline void SmokerClimate::control(const climate::ClimateCall &call) {
   if (this->parent_ != nullptr)
     this->parent_->on_climate_control(call);
+}
+
+inline void SmokerBroilSelect::control(const std::string &value) {
+  this->publish_state(value);
+  if (this->parent_ != nullptr)
+    this->parent_->on_broil_select(value);
+}
+
+inline void SmokerCookTimeNumber::control(float value) {
+  this->publish_state(value);
+  if (this->parent_ != nullptr)
+    this->parent_->on_cook_time((uint16_t) lroundf(value));
+}
+
+inline void SmokerProbeTargetNumber::control(float value) {
+  this->publish_state(value);
+  if (this->parent_ != nullptr)
+    this->parent_->on_probe_target((uint16_t) lroundf(value));
 }
 
 }  // namespace masterbuilt_smoker

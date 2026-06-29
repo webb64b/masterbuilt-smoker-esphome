@@ -6,6 +6,8 @@ from esphome.components import (
     button,
     climate,
     esp32_ble_tracker,
+    number,
+    select,
     sensor,
 )
 from esphome.const import (
@@ -21,7 +23,7 @@ from esphome.const import (
 
 CODEOWNERS = ["@webb64b"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["binary_sensor", "button", "climate", "sensor"]
+AUTO_LOAD = ["binary_sensor", "button", "climate", "number", "select", "sensor"]
 
 masterbuilt_smoker_ns = cg.esphome_ns.namespace("masterbuilt_smoker")
 MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
@@ -32,6 +34,10 @@ MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
 )
 ForgetPairingButton = masterbuilt_smoker_ns.class_("ForgetPairingButton", button.Button)
 SmokerClimate = masterbuilt_smoker_ns.class_("SmokerClimate", climate.Climate)
+SmokerBroilSelect = masterbuilt_smoker_ns.class_("SmokerBroilSelect", select.Select)
+SmokerCookTimeNumber = masterbuilt_smoker_ns.class_("SmokerCookTimeNumber", number.Number)
+SmokerProbeTargetNumber = masterbuilt_smoker_ns.class_("SmokerProbeTargetNumber", number.Number)
+BROIL_OPTIONS = ["Off", "Low", "Medium", "High"]
 
 CONF_CHAMBER_TEMPERATURE = "chamber_temperature"
 CONF_TARGET_TEMPERATURE = "target_temperature"
@@ -43,6 +49,9 @@ CONF_PROBES = ["probe_1", "probe_2", "probe_3", "probe_4"]
 CONF_DOOR = "door"
 CONF_TEMPERATURE_ERROR = "temperature_error"
 CONF_CLIMATE = "climate"
+CONF_BROIL = "broil"
+CONF_COOK_TIMER = "cook_timer"
+CONF_PROBE_TARGET = "probe_target"
 
 
 def _temperature_schema():
@@ -85,6 +94,20 @@ CONFIG_SCHEMA = (
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
             cv.Optional(CONF_CLIMATE): climate.climate_schema(SmokerClimate),
+            cv.Optional(CONF_BROIL): select.select_schema(
+                SmokerBroilSelect,
+                icon="mdi:fire",
+            ),
+            cv.Optional(CONF_COOK_TIMER): number.number_schema(
+                SmokerCookTimeNumber,
+                unit_of_measurement=UNIT_MINUTE,
+                icon="mdi:timer-outline",
+            ),
+            cv.Optional(CONF_PROBE_TARGET): number.number_schema(
+                SmokerProbeTargetNumber,
+                unit_of_measurement="°F",
+                device_class=DEVICE_CLASS_TEMPERATURE,
+            ),
             **{cv.Optional(p): _temperature_schema() for p in CONF_PROBES},
         }
     )
@@ -123,6 +146,22 @@ async def to_code(config):
         await climate.register_climate(climate_var, climate_conf)
         cg.add(climate_var.set_parent(var))
         cg.add(var.set_climate(climate_var))
+    if CONF_BROIL in config:
+        broil = await select.new_select(config[CONF_BROIL], options=BROIL_OPTIONS)
+        cg.add(broil.set_parent(var))
+        cg.add(var.set_broil_select(broil))
+    if CONF_COOK_TIMER in config:
+        cook_timer = await number.new_number(
+            config[CONF_COOK_TIMER], min_value=0, max_value=1440, step=5
+        )
+        cg.add(cook_timer.set_parent(var))
+        cg.add(var.set_cook_time_number(cook_timer))
+    if CONF_PROBE_TARGET in config:
+        probe_target = await number.new_number(
+            config[CONF_PROBE_TARGET], min_value=32, max_value=300, step=5
+        )
+        cg.add(probe_target.set_parent(var))
+        cg.add(var.set_probe_target_number(probe_target))
     for i, p in enumerate(CONF_PROBES):
         if p in config:
             cg.add(var.set_probe(i, await sensor.new_sensor(config[p])))
