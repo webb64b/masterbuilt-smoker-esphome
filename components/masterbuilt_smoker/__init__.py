@@ -158,7 +158,7 @@ async def to_code(config):
         cg.add(var.set_cook_time_number(cook_timer))
     if CONF_PROBE_TARGET in config:
         probe_target = await number.new_number(
-            config[CONF_PROBE_TARGET], min_value=32, max_value=300, step=5
+            config[CONF_PROBE_TARGET], min_value=0, max_value=300, step=5
         )
         cg.add(probe_target.set_parent(var))
         cg.add(var.set_probe_target_number(probe_target))

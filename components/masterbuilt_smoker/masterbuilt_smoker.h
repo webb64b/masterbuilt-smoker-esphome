@@ -151,6 +151,14 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     } else {
       ESP_LOGI(TAG, "No stored pairing yet - put the smoker in pairing mode for first-time setup");
     }
+
+    // Give the optimistic control numbers a starting value so they don't read 'unknown' before use.
+    this->set_timeout("init_numbers", 200, [this]() {
+      if (this->cook_time_number_ != nullptr && std::isnan(this->cook_time_number_->state))
+        this->cook_time_number_->publish_state(0);
+      if (this->probe_target_number_ != nullptr && std::isnan(this->probe_target_number_->state))
+        this->probe_target_number_->publish_state(0);
+    });
   }
 
   // True once we know this smoker's identity, i.e. we can reconnect without the pairing button.
