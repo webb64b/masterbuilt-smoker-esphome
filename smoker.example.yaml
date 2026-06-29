@@ -75,3 +75,21 @@ masterbuilt_smoker:
     name: "Meat Probe 3"
   probe_4:
     name: "Meat Probe 4"
+
+  # --- Control (optional) ---
+  # These actually drive the smoker. Read the safety note in the README before using them.
+  # The smoker (bottom) and broiler (top) are mutually exclusive: turning broil on turns smoke off.
+  climate:
+    name: "Smoker"          # off / heat, with a target temperature
+  broil:
+    name: "Broil"           # Off / Low / Medium / High (top element)
+  cook_timer:
+    name: "Cook Timer"      # minutes
+  probe_target:
+    name: "Probe 1 Target"  # meat-probe alarm temperature
+
+  # --- Diagnostics (optional, read-only) ---
+  door:
+    name: "Door"
+  temperature_error:
+    name: "Temperature Error"

@@ -64,10 +64,11 @@ device or move it to a different smoker.
 > **Heads up:** the smoker only allows **one** Bluetooth connection at a time. While the ESP32 is
 > connected, the phone app won't be able to connect, and vice-versa.
 
-> **Safety:** this component is read-only today. It subscribes to telemetry but does not set cook
-> temperature, time, or any other control output. The Bluetooth link is plain/unencrypted, so keep
-> the ESP32 within your own trusted environment and do not treat this as a safety interlock or a
-> substitute for normal smoker supervision.
+> **Safety:** out of the box this is read-only — it just reads telemetry. It can optionally control
+> the smoker too (see [Controlling the smoker](#controlling-the-smoker-optional)); if you enable that,
+> read the safety note there. The Bluetooth link is plain/unencrypted, so keep the ESP32 within your
+> own trusted environment, and never treat Home Assistant as a safety interlock or a substitute for
+> supervising the smoker.
 
 ### Re-pairing or moving to another smoker
 
@@ -96,6 +97,31 @@ masterbuilt_smoker:
 | `Cook Time` | Set cook time (minutes) |
 | `Time Remaining` | Remaining cook time (minutes) |
 | `Meat Probe 1`–`4` | Probe temperatures; `unknown` when a probe isn't plugged in |
+
+## Controlling the smoker (optional)
+
+Beyond reading temperatures, the component can drive the smoker the way the phone app does. These
+controls are optional — leave them out of your config and the integration stays read-only.
+
+| Control | What it does |
+| --- | --- |
+| `Smoker` (climate) | Off / Heat with an adjustable target temperature — the bottom (smoke) element |
+| `Broil` (select) | Off / Low / Medium / High — the top (broiler) element |
+| `Cook Timer` (number) | Cook time in minutes |
+| `Probe 1 Target` (number) | Meat-probe alarm temperature |
+| `Door` (binary sensor) | Open / closed |
+| `Temperature Error` (binary sensor) | Sensor fault flag |
+
+The smoke (bottom) and broil (top) elements are **mutually exclusive**, just like the smoker's own
+panel: turning broil on turns the smoke off (the climate reads Off), and turning the climate on turns
+broil off. The broiler is a Low/Medium/High level, not a free temperature — that's all the smoker
+accepts over Bluetooth.
+
+> **Safety.** These controls really do power the smoker on, set its temperature, and run the broiler.
+> The smoker enforces its own door interlock — it will not start heating with the door open — and this
+> component relies on that rather than second-guessing it. Do not treat Home Assistant as a safety
+> interlock or a substitute for supervising the smoker. The Bluetooth link is plain and unencrypted,
+> so keep the ESP32 in your own trusted environment.
 
 ## How it works
 

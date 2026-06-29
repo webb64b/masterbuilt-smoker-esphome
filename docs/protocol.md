@@ -111,7 +111,24 @@ B3 [flags] [probe1:LE16@2] [probe2:LE16@4] [probe3:LE16@6] [probe4:LE16@8] [targ
 offsets 2/4/6/8, their per-probe target temperatures at 10/12/14/16. The component currently
 publishes probe temperatures only.
 
-## Set-point command (not yet implemented here)
+## Control commands (fff3)
 
-The app sets temperature/time by writing fff3 `a1 07 05 <minutes:LE16> <temp:LE16>`. This component
-is read-only today; controlling the smoker from Home Assistant is a possible future addition.
+Control is written to `fff3` (`UUID_SMOKER_SETTINGS`). The settings command is full-state — one write
+carries power, temperature, time and broil together:
+
+```
+A1 [flags1] [flags2] [cookTime:LE16] [setTemp:LE16] [broilLevel]
+flags1: bit0=Fahrenheit  bit1&2=smoke/heat element on  bit3=broil
+flags2: bit0=power  bit2=cook active  bit3=broil
+broilLevel: 0=off, 1=Low, 2=Medium, 3=High
+```
+
+The smoke (bottom) and broil (top) elements are mutually exclusive: a broil command sets the broil
+bits and clears the cook bit, so turning broil on turns the smoke element off. Power on plus the smoke
+target heats the bottom element; the broiler runs by level only — the smoker does not accept a broil
+temperature over Bluetooth. Example: power on, Fahrenheit, heat to 225°F is `A1 07 05 00 00 E1 00 00`.
+
+Meat-probe alarm targets are a separate command, `A3 [enableBits] [p1:LE16] [p2:LE16] ...`, where each
+enable bit marks a probe whose target follows. The status frame does **not** report a usable broil
+level back (byte 15 is stale and the broil-control bit is not set while broiling), so a controller
+should track the commanded broil level itself.
