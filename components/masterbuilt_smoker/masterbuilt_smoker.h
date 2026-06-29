@@ -3,6 +3,7 @@
 #include "esphome/components/ble_client/ble_client.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/button/button.h"
+#include "esphome/components/climate/climate.h"
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/core/component.h"
@@ -13,6 +14,7 @@
 #include <esp_gattc_api.h>
 
 #include <array>
+#include <cmath>
 #include <vector>
 
 namespace esphome {
@@ -37,6 +39,37 @@ class ForgetPairingButton : public button::Button {
   void press_action() override;
 
   MasterbuiltSmoker *parent_{nullptr};
+};
+
+// A simple OFF/HEAT thermostat for the smoker. ESPHome climate works in Celsius; the smoker
+// speaks Fahrenheit, so the parent converts at the Bluetooth boundary. Visual range is given in
+// degrees F and converted to C here.
+class SmokerClimate : public climate::Climate {
+ public:
+  void set_parent(MasterbuiltSmoker *parent) { this->parent_ = parent; }
+  void set_visual_range_f(float min_f, float max_f, float step_f) {
+    this->min_f_ = min_f;
+    this->max_f_ = max_f;
+    this->step_f_ = step_f;
+  }
+
+ protected:
+  void control(const climate::ClimateCall &call) override;
+
+  climate::ClimateTraits traits() override {
+    auto traits = climate::ClimateTraits();
+    traits.set_feature_flags(climate::CLIMATE_SUPPORTS_CURRENT_TEMPERATURE | climate::CLIMATE_SUPPORTS_ACTION);
+    traits.set_supported_modes({climate::CLIMATE_MODE_OFF, climate::CLIMATE_MODE_HEAT});
+    traits.set_visual_min_temperature((this->min_f_ - 32.0f) * 5.0f / 9.0f);
+    traits.set_visual_max_temperature((this->max_f_ - 32.0f) * 5.0f / 9.0f);
+    traits.set_visual_temperature_step(this->step_f_ * 5.0f / 9.0f);
+    return traits;
+  }
+
+  MasterbuiltSmoker *parent_{nullptr};
+  float min_f_{100.0f};
+  float max_f_{320.0f};
+  float step_f_{5.0f};
 };
 
 // The smoker speaks a two-round challenge/response over a plain (unencrypted) GATT link.
@@ -164,6 +197,19 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   }
   void set_door_sensor(binary_sensor::BinarySensor *s) { this->door_sensor_ = s; }
   void set_temp_error_sensor(binary_sensor::BinarySensor *s) { this->temp_error_sensor_ = s; }
+  void set_climate(SmokerClimate *c) { this->climate_ = c; }
+
+  // Called by SmokerClimate::control. Updates the desired power/target and pushes a settings write.
+  // The smoker enforces its own door interlock (it refuses to heat with the door open), so we send
+  // the command unconditionally and let the smoker be the authority.
+  void on_climate_control(const climate::ClimateCall &call) {
+    DesiredState next = this->desired_;
+    if (call.get_mode().has_value())
+      next.power_on = (*call.get_mode() == climate::CLIMATE_MODE_HEAT);
+    if (call.get_target_temperature().has_value())
+      next.target_temp = this->to_smoker_temp_(*call.get_target_temperature());
+    this->apply_desired_(next);
+  }
 
   // Called from the advertisement handler when the smoker is in pairing mode and broadcasts a
   // fresh code. Forces a full round 1 so we (re)learn this unit's grill_half.
@@ -280,6 +326,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   static constexpr uint16_t COMPANY_ID = 0x4842;
   static constexpr uint16_t FFF1_HANDLE = 0x0025;
   static constexpr uint16_t FFF2_HANDLE = 0x0027;
+  static constexpr uint16_t FFF3_HANDLE = 0x0029;  // settings / control (write)
   static constexpr uint16_t FFF4_HANDLE = 0x002b;
   static constexpr uint16_t FFF4_CCCD_HANDLE = 0x002c;
 
@@ -325,7 +372,22 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   sensor::Sensor *probes_[4]{nullptr, nullptr, nullptr, nullptr};
   binary_sensor::BinarySensor *door_sensor_{nullptr};
   binary_sensor::BinarySensor *temp_error_sensor_{nullptr};
+  SmokerClimate *climate_{nullptr};
   bool door_open_{false};
+
+  // The 0xA1 settings command is full-state (it carries power, temp, time and broil together), so
+  // we keep the intended state and resend the whole command on any change. Seeded from the first
+  // status frame so a single control never clobbers the others.
+  struct DesiredState {
+    bool power_on{false};
+    uint16_t target_temp{225};
+    uint16_t cook_time{0};
+    uint8_t broil_level{0};
+    bool fahrenheit{true};
+  };
+  DesiredState desired_{};
+  bool desired_seeded_{false};
+  bool smoker_fahrenheit_{true};
 
   void lock_address_(uint64_t address, esp_ble_addr_type_t address_type, int rssi, bool configured) {
     this->locked_address_ = address;
@@ -491,6 +553,76 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     return (uint16_t) ((v[i] | (v[i + 1] << 8)) & 0x0FFF);
   }
 
+  // Climate works in Celsius; the smoker usually reports Fahrenheit. Convert at the boundary.
+  float to_climate_temp_(uint16_t raw) const {
+    return this->smoker_fahrenheit_ ? ((float) raw - 32.0f) * 5.0f / 9.0f : (float) raw;
+  }
+  uint16_t to_smoker_temp_(float climate_c) const {
+    float v = this->smoker_fahrenheit_ ? (climate_c * 9.0f / 5.0f + 32.0f) : climate_c;
+    if (v < 0.0f)
+      v = 0.0f;
+    return (uint16_t) lroundf(v);
+  }
+
+  // v[1] is a presence bitmask: bit4 set-time@11, bit5 set-temp@13, bit6 broil-level@15. Only read a
+  // field when its flag is set, otherwise the bytes are unrelated (this is what produced a stray
+  // broil level before).
+  void seed_desired_from_b2_(const uint8_t *v, uint16_t len) {
+    this->desired_.fahrenheit = ((v[1] >> 0) & 0x01) != 0;
+    this->desired_.power_on = ((v[2] >> 0) & 0x01) != 0;
+    if ((v[1] >> 5) & 0x01)
+      this->desired_.target_temp = sfloat_(v, len, 13);
+    if ((v[1] >> 4) & 0x01)
+      this->desired_.cook_time = sfloat_(v, len, 11);
+    this->desired_.broil_level = (((v[1] >> 6) & 0x01) && len > 15) ? v[15] : 0;
+    this->desired_seeded_ = true;
+  }
+
+  void build_settings_command_(uint8_t *out) const {
+    const bool power = this->desired_.power_on;
+    const bool broil = power && this->desired_.broil_level > 0;
+    uint8_t f1 = this->desired_.fahrenheit ? 0x01 : 0x00;
+    uint8_t f2 = 0x00;
+    if (power) {
+      f1 |= 0x06;  // smoker/heat element on (bits 1 and 2)
+      f2 |= 0x05;  // power (bit 0) + cook active (bit 2)
+    }
+    if (broil) {
+      f1 |= 0x08;
+      f2 |= 0x08;
+    }
+    out[0] = 0xA1;
+    out[1] = f1;
+    out[2] = f2;
+    out[3] = this->desired_.cook_time & 0xFF;
+    out[4] = (this->desired_.cook_time >> 8) & 0xFF;
+    out[5] = this->desired_.target_temp & 0xFF;
+    out[6] = (this->desired_.target_temp >> 8) & 0xFF;
+    out[7] = power ? this->desired_.broil_level : 0;
+  }
+
+  // Write the desired state as a settings command. Only sent while streaming; otherwise the control
+  // is ignored and the entity snaps back to the smoker's reported state.
+  void apply_desired_(const DesiredState &next) {
+    if (!this->session_active_ || this->step_ != Step::R2_CCCD_SENT) {
+      ESP_LOGW(TAG, "Smoker is not connected/streaming; ignoring control change");
+      this->republish_climate_();
+      return;
+    }
+    this->desired_ = next;
+    uint8_t cmd[8];
+    this->build_settings_command_(cmd);
+    this->log_bytes_(ESP_LOG_INFO, "Write fff3 settings", cmd, sizeof(cmd));
+    if (!this->write_char_(FFF3_HANDLE, cmd, sizeof(cmd)))
+      ESP_LOGW(TAG, "Failed to send settings command");
+  }
+
+  // Re-publish climate from the last status so a refused/ignored control snaps back in HA.
+  void republish_climate_() {
+    if (this->climate_ != nullptr)
+      this->climate_->publish_state();
+  }
+
   void parse_telemetry_(uint8_t *v, uint16_t len) {
     if (len >= 15 && v[0] == 0xb2) {
       uint16_t chamber = sfloat_(v, len, 4);
@@ -506,12 +638,30 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->cook_time_->publish_state(set_min);
       if (this->time_remaining_ != nullptr)
         this->time_remaining_->publish_state(remain);
-      // Leading status flags: v[2] control byte (bit3 = door open), v[3] caps/errors (bit0 = temp error).
+      // Leading status flags: v[1] unit, v[2] control (bit0 power, bit2 heat, bit3 door),
+      // v[3] caps/errors (bit0 = temp error).
+      this->smoker_fahrenheit_ = ((v[1] >> 0) & 0x01) != 0;
       this->door_open_ = ((v[2] >> 3) & 0x01) != 0;
       if (this->door_sensor_ != nullptr)
         this->door_sensor_->publish_state(this->door_open_);
       if (this->temp_error_sensor_ != nullptr)
         this->temp_error_sensor_->publish_state(((v[3] >> 0) & 0x01) != 0);
+      if (!this->desired_seeded_)
+        this->seed_desired_from_b2_(v, len);
+      if (this->climate_ != nullptr) {
+        const bool power = ((v[2] >> 0) & 0x01) != 0;
+        const bool heating = ((v[2] >> 2) & 0x01) != 0;
+        this->climate_->current_temperature = this->to_climate_temp_(chamber);
+        // When no cook is set the smoker reports a 0 set-point, which converts to a target below the
+        // climate's minimum and breaks Home Assistant's set_temperature. Fall back to the desired
+        // target so the reported value always stays inside the visual range.
+        uint16_t shown_target = (set_temp > 0) ? set_temp : this->desired_.target_temp;
+        this->climate_->target_temperature = this->to_climate_temp_(shown_target);
+        this->climate_->mode = power ? climate::CLIMATE_MODE_HEAT : climate::CLIMATE_MODE_OFF;
+        this->climate_->action = heating ? climate::CLIMATE_ACTION_HEATING
+                                         : (power ? climate::CLIMATE_ACTION_IDLE : climate::CLIMATE_ACTION_OFF);
+        this->climate_->publish_state();
+      }
     } else if (len >= 2 && v[0] == 0xb3) {
       uint8_t flags = v[1];
       for (int i = 0; i < 4; i++) {
@@ -538,6 +688,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     this->step_ = Step::IDLE;
     this->conn_id_ = 0;
     this->gattc_if_ = 0;
+    this->desired_seeded_ = false;
   }
 
   void fail_and_disconnect_(const char *reason) {
@@ -603,6 +754,11 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
 inline void ForgetPairingButton::press_action() {
   if (this->parent_ != nullptr)
     this->parent_->forget_pairing();
+}
+
+inline void SmokerClimate::control(const climate::ClimateCall &call) {
+  if (this->parent_ != nullptr)
+    this->parent_->on_climate_control(call);
 }
 
 }  // namespace masterbuilt_smoker

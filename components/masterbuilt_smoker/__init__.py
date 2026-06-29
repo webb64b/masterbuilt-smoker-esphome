@@ -4,6 +4,7 @@ from esphome.components import (
     ble_client,
     binary_sensor,
     button,
+    climate,
     esp32_ble_tracker,
     sensor,
 )
@@ -20,7 +21,7 @@ from esphome.const import (
 
 CODEOWNERS = ["@webb64b"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["binary_sensor", "button", "sensor"]
+AUTO_LOAD = ["binary_sensor", "button", "climate", "sensor"]
 
 masterbuilt_smoker_ns = cg.esphome_ns.namespace("masterbuilt_smoker")
 MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
@@ -30,6 +31,7 @@ MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
     esp32_ble_tracker.ESPBTDeviceListener,
 )
 ForgetPairingButton = masterbuilt_smoker_ns.class_("ForgetPairingButton", button.Button)
+SmokerClimate = masterbuilt_smoker_ns.class_("SmokerClimate", climate.Climate)
 
 CONF_CHAMBER_TEMPERATURE = "chamber_temperature"
 CONF_TARGET_TEMPERATURE = "target_temperature"
@@ -40,6 +42,7 @@ CONF_SMOKER_MAC = "smoker_mac"
 CONF_PROBES = ["probe_1", "probe_2", "probe_3", "probe_4"]
 CONF_DOOR = "door"
 CONF_TEMPERATURE_ERROR = "temperature_error"
+CONF_CLIMATE = "climate"
 
 
 def _temperature_schema():
@@ -81,6 +84,7 @@ CONFIG_SCHEMA = (
                 device_class=DEVICE_CLASS_PROBLEM,
                 entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
             ),
+            cv.Optional(CONF_CLIMATE): climate.climate_schema(SmokerClimate),
             **{cv.Optional(p): _temperature_schema() for p in CONF_PROBES},
         }
     )
@@ -113,6 +117,12 @@ async def to_code(config):
         cg.add(var.set_door_sensor(await binary_sensor.new_binary_sensor(config[CONF_DOOR])))
     if CONF_TEMPERATURE_ERROR in config:
         cg.add(var.set_temp_error_sensor(await binary_sensor.new_binary_sensor(config[CONF_TEMPERATURE_ERROR])))
+    if CONF_CLIMATE in config:
+        climate_conf = config[CONF_CLIMATE]
+        climate_var = cg.new_Pvariable(climate_conf[CONF_ID])
+        await climate.register_climate(climate_var, climate_conf)
+        cg.add(climate_var.set_parent(var))
+        cg.add(var.set_climate(climate_var))
     for i, p in enumerate(CONF_PROBES):
         if p in config:
             cg.add(var.set_probe(i, await sensor.new_sensor(config[p])))
