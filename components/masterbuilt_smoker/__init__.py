@@ -1,17 +1,26 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import ble_client, button, esp32_ble_tracker, sensor
+from esphome.components import (
+    ble_client,
+    binary_sensor,
+    button,
+    esp32_ble_tracker,
+    sensor,
+)
 from esphome.const import (
     CONF_ID,
+    DEVICE_CLASS_DOOR,
+    DEVICE_CLASS_PROBLEM,
     DEVICE_CLASS_TEMPERATURE,
     ENTITY_CATEGORY_CONFIG,
+    ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
     UNIT_MINUTE,
 )
 
 CODEOWNERS = ["@webb64b"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["button", "sensor"]
+AUTO_LOAD = ["binary_sensor", "button", "sensor"]
 
 masterbuilt_smoker_ns = cg.esphome_ns.namespace("masterbuilt_smoker")
 MasterbuiltSmoker = masterbuilt_smoker_ns.class_(
@@ -29,6 +38,8 @@ CONF_TIME_REMAINING = "time_remaining"
 CONF_FORGET_PAIRING = "forget_pairing"
 CONF_SMOKER_MAC = "smoker_mac"
 CONF_PROBES = ["probe_1", "probe_2", "probe_3", "probe_4"]
+CONF_DOOR = "door"
+CONF_TEMPERATURE_ERROR = "temperature_error"
 
 
 def _temperature_schema():
@@ -62,6 +73,14 @@ CONFIG_SCHEMA = (
                 icon="mdi:bluetooth-off",
                 entity_category=ENTITY_CATEGORY_CONFIG,
             ),
+            cv.Optional(CONF_DOOR): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_DOOR,
+                icon="mdi:door",
+            ),
+            cv.Optional(CONF_TEMPERATURE_ERROR): binary_sensor.binary_sensor_schema(
+                device_class=DEVICE_CLASS_PROBLEM,
+                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+            ),
             **{cv.Optional(p): _temperature_schema() for p in CONF_PROBES},
         }
     )
@@ -90,6 +109,10 @@ async def to_code(config):
     if CONF_FORGET_PAIRING in config:
         forget_pairing = await button.new_button(config[CONF_FORGET_PAIRING])
         cg.add(forget_pairing.set_parent(var))
+    if CONF_DOOR in config:
+        cg.add(var.set_door_sensor(await binary_sensor.new_binary_sensor(config[CONF_DOOR])))
+    if CONF_TEMPERATURE_ERROR in config:
+        cg.add(var.set_temp_error_sensor(await binary_sensor.new_binary_sensor(config[CONF_TEMPERATURE_ERROR])))
     for i, p in enumerate(CONF_PROBES):
         if p in config:
             cg.add(var.set_probe(i, await sensor.new_sensor(config[p])))

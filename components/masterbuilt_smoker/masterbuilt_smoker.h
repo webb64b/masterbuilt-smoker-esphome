@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esphome/components/ble_client/ble_client.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/button/button.h"
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #include "esphome/components/sensor/sensor.h"
@@ -161,6 +162,8 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     if (i >= 0 && i < 4)
       this->probes_[i] = s;
   }
+  void set_door_sensor(binary_sensor::BinarySensor *s) { this->door_sensor_ = s; }
+  void set_temp_error_sensor(binary_sensor::BinarySensor *s) { this->temp_error_sensor_ = s; }
 
   // Called from the advertisement handler when the smoker is in pairing mode and broadcasts a
   // fresh code. Forces a full round 1 so we (re)learn this unit's grill_half.
@@ -320,6 +323,9 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
   sensor::Sensor *cook_time_{nullptr};
   sensor::Sensor *time_remaining_{nullptr};
   sensor::Sensor *probes_[4]{nullptr, nullptr, nullptr, nullptr};
+  binary_sensor::BinarySensor *door_sensor_{nullptr};
+  binary_sensor::BinarySensor *temp_error_sensor_{nullptr};
+  bool door_open_{false};
 
   void lock_address_(uint64_t address, esp_ble_addr_type_t address_type, int rssi, bool configured) {
     this->locked_address_ = address;
@@ -500,6 +506,12 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->cook_time_->publish_state(set_min);
       if (this->time_remaining_ != nullptr)
         this->time_remaining_->publish_state(remain);
+      // Leading status flags: v[2] control byte (bit3 = door open), v[3] caps/errors (bit0 = temp error).
+      this->door_open_ = ((v[2] >> 3) & 0x01) != 0;
+      if (this->door_sensor_ != nullptr)
+        this->door_sensor_->publish_state(this->door_open_);
+      if (this->temp_error_sensor_ != nullptr)
+        this->temp_error_sensor_->publish_state(((v[3] >> 0) & 0x01) != 0);
     } else if (len >= 2 && v[0] == 0xb3) {
       uint8_t flags = v[1];
       for (int i = 0; i < 4; i++) {
