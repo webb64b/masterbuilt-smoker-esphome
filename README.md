@@ -49,9 +49,13 @@ external_components:
 
 ### 2. Flash and pair (one time)
 
-Flash the ESP32 over USB. Then put the smoker in **pairing mode** once while the ESP32 is running —
-it discovers the smoker, captures the pairing code, completes the handshake, and **saves the
-smoker's identity to flash**.
+Flash the ESP32 over USB. Then put the smoker in **pairing mode** once while the ESP32 is running.
+
+Use whatever pairing step your smoker's manual describes — it's the same one you'd use to connect the
+phone app. On the 30" digital electric vertical, that's **pressing and holding the Bluetooth/pairing
+button on the control panel until the display reads "pair."** While the smoker is in pairing mode the
+ESP32 discovers it, captures the pairing code, completes the handshake, and **saves the smoker's
+identity to flash**.
 
 From then on the ESP32 reconnects on its own — after a reboot, a power cycle, anything — with **no
 pairing button**, exactly like the phone app's "connect." You only pair again if you reset the
