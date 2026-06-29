@@ -134,6 +134,12 @@ There's an optional Lovelace card in [`card/`](card) that folds these entities i
 button when the smoker is off, and the full controls (temperature, smoke/broil, probes, timer, door)
 when it's on.
 
+<p align="center">
+  <img src="docs/images/card-on.jpeg" width="300" alt="The card with the smoker running">
+  &nbsp;&nbsp;
+  <img src="docs/images/card-off.jpeg" width="300" alt="The card when the smoker is off">
+</p>
+
 Add the file as a dashboard resource, either from a CDN:
 
 ```yaml
