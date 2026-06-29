@@ -691,6 +691,7 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     if (!this->session_active_ || this->step_ != Step::R2_CCCD_SENT) {
       ESP_LOGW(TAG, "Smoker is not connected/streaming; ignoring control change");
       this->republish_climate_();
+      this->publish_broil_select_();
       return;
     }
     this->desired_ = next;
@@ -699,12 +700,22 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
     this->log_bytes_(ESP_LOG_INFO, "Write fff3 settings", cmd, sizeof(cmd));
     if (!this->write_char_(FFF3_HANDLE, cmd, sizeof(cmd)))
       ESP_LOGW(TAG, "Failed to send settings command");
+    this->publish_broil_select_();
   }
 
   // Re-publish climate from the last status so a refused/ignored control snaps back in HA.
   void republish_climate_() {
     if (this->climate_ != nullptr)
       this->climate_->publish_state();
+  }
+
+  // The broil level is not reliably reported in the status frame, so the broil select reflects the
+  // commanded (desired) state instead.
+  void publish_broil_select_() {
+    if (this->broil_select_ == nullptr)
+      return;
+    uint8_t b = this->desired_.broil_level;
+    this->broil_select_->publish_state(b == 1 ? "Low" : b == 2 ? "Medium" : b == 3 ? "High" : "Off");
   }
 
   void parse_telemetry_(uint8_t *v, uint16_t len) {
@@ -720,8 +731,6 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->target_temp_->publish_state(set_temp);
       if (this->cook_time_ != nullptr)
         this->cook_time_->publish_state(set_min);
-      if (this->cook_time_number_ != nullptr)
-        this->cook_time_number_->publish_state(set_min);
       if (this->time_remaining_ != nullptr)
         this->time_remaining_->publish_state(remain);
       // Leading status flags: v[1] unit, v[2] control (bit0 power, bit2 heat, bit3 door),
@@ -732,10 +741,11 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->door_sensor_->publish_state(this->door_open_);
       if (this->temp_error_sensor_ != nullptr)
         this->temp_error_sensor_->publish_state(((v[3] >> 0) & 0x01) != 0);
-      if (!this->desired_seeded_)
+      if (!this->desired_seeded_) {
         this->seed_desired_from_b2_(v, len);
-      const bool cooking = ((v[2] >> 2) & 0x01) != 0;   // smoke/heat element
-      const bool broiling = ((v[2] >> 5) & 0x01) != 0;  // broil element
+        this->publish_broil_select_();
+      }
+      const bool cooking = ((v[2] >> 2) & 0x01) != 0;  // smoke/heat element
       if (this->climate_ != nullptr) {
         this->climate_->current_temperature = this->to_climate_temp_(chamber);
         // When no cook is set the smoker reports a 0 set-point, which converts to a target below the
@@ -747,11 +757,6 @@ class MasterbuiltSmoker : public Component, public ble_client::BLEClientNode, pu
         this->climate_->mode = cooking ? climate::CLIMATE_MODE_HEAT : climate::CLIMATE_MODE_OFF;
         this->climate_->action = cooking ? climate::CLIMATE_ACTION_HEATING : climate::CLIMATE_ACTION_OFF;
         this->climate_->publish_state();
-      }
-      if (this->broil_select_ != nullptr) {
-        uint8_t blevel = (broiling && ((v[1] >> 6) & 0x01) && len > 15) ? v[15] : 0;
-        const char *opt = blevel == 1 ? "Low" : blevel == 2 ? "Medium" : blevel == 3 ? "High" : "Off";
-        this->broil_select_->publish_state(opt);
       }
     } else if (len >= 2 && v[0] == 0xb3) {
       uint8_t flags = v[1];
@@ -853,7 +858,6 @@ inline void SmokerClimate::control(const climate::ClimateCall &call) {
 }
 
 inline void SmokerBroilSelect::control(const std::string &value) {
-  this->publish_state(value);
   if (this->parent_ != nullptr)
     this->parent_->on_broil_select(value);
 }
