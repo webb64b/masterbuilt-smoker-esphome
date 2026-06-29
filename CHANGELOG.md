@@ -15,6 +15,11 @@ Notable changes to the Masterbuilt smoker ESPHome component and dashboard card.
 - Control entities: a climate for the smoke element (off/heat with a target temperature), a broil
   select (Off/Low/Medium/High), a cook-timer number, a probe-target number, and door and
   temperature-error binary sensors.
+- Support for more smoker models, all optional: a cabinet `light` switch, a `meat_probe_error` sensor,
+  `broiler_available` and `smoke_on_demand_available` diagnostic sensors, and probe targets for all four
+  probes. The light and capability features are built from the protocol and not yet tested on hardware.
+- Celsius support via `temperature_unit: celsius`, which adapts the sensor labels and target ranges; the
+  temperatures themselves already follow whatever unit the smoker reports.
 
 ### Notes
 

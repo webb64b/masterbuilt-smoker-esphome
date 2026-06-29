@@ -6,7 +6,7 @@
 const VERSION = "1.0.0";
 const TEMP_STEP = 5;   // degrees per tap on the target
 const TIME_STEP = 5;   // minutes per tap on the timer
-const PENDING_ACTIONS = new Set(["power", "mode-smoke", "mode-broil", "broil"]);  // show a spinner + lock
+const PENDING_ACTIONS = new Set(["power", "light", "mode-smoke", "mode-broil", "broil"]);  // spinner + lock
 
 const STYLE = `
   :host { --mb-bg1:#26262a; --mb-bg2:#161617; --mb-panel:#2f2f34; --mb-line:#3c3c42;
@@ -40,6 +40,9 @@ const STYLE = `
   .indicators ha-icon.open { color:#ffd24a; }
   .power-small { background:none; border:none; color:var(--mb-fire); cursor:pointer; display:flex; padding:2px; }
   .power-small ha-icon { --mdc-icon-size:24px; }
+  .icon-btn { background:none; border:none; color:var(--mb-mute); cursor:pointer; display:flex; padding:2px; transition:.18s; }
+  .icon-btn ha-icon { --mdc-icon-size:22px; }
+  .icon-btn.on { color:var(--mb-fire); }
 
   .readout { text-align:center; padding:2px 0 0; }
   .led { font-family:"DSEG7",ui-monospace,"Courier New",monospace; font-weight:700; line-height:1;
@@ -168,6 +171,7 @@ class MasterbuiltSmokerCard extends HTMLElement {
             <span class="indicators">
               <ha-icon data-ref="door" hidden></ha-icon>
               <ha-icon data-ref="err" class="warn" icon="mdi:alert" hidden></ha-icon>
+              ${c.light ? `<button class="icon-btn" data-action="light" data-ref="lightbtn" title="Light">${this._icon("mdi:lightbulb")}</button>` : ""}
               <button class="power-small" data-action="power" title="Turn off">${this._icon("mdi:power")}</button>
             </span>
           </div>
@@ -218,6 +222,10 @@ class MasterbuiltSmokerCard extends HTMLElement {
     const a = el.dataset.action;
     const c = this._config;
     if (a === "power") this._togglePower();
+    else if (a === "light") {
+      const on = this._state(c.light) === "on";
+      this._call("switch", on ? "turn_off" : "turn_on", { entity_id: c.light });
+    }
     else if (a === "temp-up") this._adjustTemp(TEMP_STEP);
     else if (a === "temp-down") this._adjustTemp(-TEMP_STEP);
     else if (a === "mode-smoke") {
@@ -243,6 +251,7 @@ class MasterbuiltSmokerCard extends HTMLElement {
   _pendingSnap(a) {
     const c = this._config;
     if (a === "power") return this._state(c.power);
+    if (a === "light") return this._state(c.light);
     if (a === "mode-smoke") return this._state(c.climate);
     return this._state(c.broil);
   }
@@ -348,6 +357,11 @@ class MasterbuiltSmokerCard extends HTMLElement {
       r.levelrow.querySelectorAll(".seg-btn").forEach((b) => {
         b.classList.toggle("active", b.dataset.level === broil);
       });
+    }
+
+    // light
+    if (c.light && r.lightbtn) {
+      r.lightbtn.classList.toggle("on", this._state(c.light) === "on");
     }
 
     // probes

@@ -55,6 +55,8 @@ ble_client:
 masterbuilt_smoker:
   id: smoker
   ble_client_id: smoker_client
+  # Optional: for a Celsius smoker, uncomment this so labels and target ranges come up in degrees C.
+  # temperature_unit: celsius
   # Optional: uncomment this if more than one compatible smoker is in Bluetooth range.
   # smoker_mac: BC:33:AC:E0:E1:27
   chamber_temperature:
@@ -89,9 +91,25 @@ masterbuilt_smoker:
     name: "Cook Timer"      # minutes
   probe_target:
     name: "Probe 1 Target"  # meat-probe alarm temperature
+  # Uncomment the extras your smoker has:
+  # probe_2_target:
+  #   name: "Probe 2 Target"
+  # probe_3_target:
+  #   name: "Probe 3 Target"
+  # probe_4_target:
+  #   name: "Probe 4 Target"
+  # light:                  # only on models with a cabinet light (built from the protocol, untested here)
+  #   name: "Light"
 
   # --- Diagnostics (optional, read-only) ---
   door:
     name: "Door"
   temperature_error:
     name: "Temperature Error"
+  meat_probe_error:
+    name: "Meat Probe Error"
+  # These report what the smoker says it supports, handy on an unfamiliar model:
+  # broiler_available:
+  #   name: "Broiler Available"
+  # smoke_on_demand_available:
+  #   name: "Smoke On Demand Available"

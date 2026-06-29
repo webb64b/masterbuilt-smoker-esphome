@@ -128,6 +128,23 @@ so an off smoker shows no reading rather than a stale leftover number.
 > interlock or a substitute for watching the smoker. The Bluetooth link is unencrypted, so keep the
 > ESP32 somewhere you trust.
 
+### Other models and Celsius
+
+Smokers vary, so these extra keys on the `masterbuilt_smoker` block are all optional and you only add
+what your smoker has:
+
+- `light` (switch) for models with a cabinet light. This is built from the protocol but not tested on
+  hardware here, since the test smoker has no light.
+- `meat_probe_error` (binary sensor) for a probe fault, alongside `temperature_error`.
+- `broiler_available` and `smoke_on_demand_available` (binary sensors) report what the smoker says it
+  has, which helps when you're figuring out an unfamiliar model.
+- `probe_2_target` / `probe_3_target` / `probe_4_target` (numbers) for smokers with more than one probe
+  (the existing `probe_target` is probe 1).
+
+For a Celsius smoker, add `temperature_unit: celsius` to the `masterbuilt_smoker` block. That labels the
+sensors in °C and ranges the targets accordingly. The temperatures themselves already follow whatever
+unit the smoker reports, so this is mainly about the labels.
+
 ## Dashboard card
 
 There's an optional Lovelace card in [`card/`](card) that folds these entities into one panel: a power
