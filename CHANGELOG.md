@@ -20,6 +20,8 @@ Notable changes to the Masterbuilt smoker ESPHome component and dashboard card.
   probes. The light and capability features are built from the protocol and not yet tested on hardware.
 - Celsius support via `temperature_unit: celsius`, which adapts the sensor labels and target ranges; the
   temperatures themselves already follow whatever unit the smoker reports.
+- Optional Bluetooth proxy: the node can double as a Home Assistant Bluetooth proxy alongside the
+  smoker, with `connection_slots` kept one below `max_connections` so the smoker always keeps a slot.
 
 ### Notes
 

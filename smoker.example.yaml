@@ -37,6 +37,14 @@ external_components:
 # The smoker uses a plain, unencrypted BLE link (no bonding).
 esp32_ble:
   io_capability: none
+  # Optional: also use this node as a Home Assistant Bluetooth proxy (the smoker is idle most of the
+  # time). Uncomment max_connections here and the bluetooth_proxy block below. connection_slots is
+  # kept one below max_connections so the smoker's own connection always has a slot.
+  # max_connections: 3
+
+# bluetooth_proxy:
+#   active: true
+#   connection_slots: 2
 
 esp32_ble_tracker:
   scan_parameters:

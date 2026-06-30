@@ -189,6 +189,34 @@ probes:
 The power button drives the master power, the Smoke and Broil buttons start those elements (tap the
 other to switch), and tapping the running element or the power button stops the cook by powering off.
 
+## Using the ESP as a Bluetooth proxy (optional)
+
+The smoker is idle most of the time, so its always-on ESP32 can double as a Home Assistant
+[Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/), extending HA's Bluetooth range to
+wherever the node sits. Anything broadcasting near it (temperature/humidity sensors, tags, presence
+beacons) shows up in HA, and HA can connect to BLE devices through it.
+
+To turn it on, give the BLE stack a connection pool and add the proxy:
+
+```yaml
+esp32_ble:
+  io_capability: none
+  max_connections: 3        # shared pool of BLE connections
+
+bluetooth_proxy:
+  active: true
+  connection_slots: 2       # one below max_connections, so the smoker always keeps a slot
+```
+
+The important part is `connection_slots`. Every BLE connection on the node shares `max_connections`,
+and nothing reserves one for the smoker automatically, so keep `connection_slots` at one below
+`max_connections` (here 2 of 3). That leaves one slot the proxy can never take, so the smoker always
+connects.
+
+A couple of notes: it covers the area around the node, not your whole house, so it is most useful for
+Bluetooth gear near the smoker. On a classic ESP32 keep it at 3 and 2 for memory headroom. Home
+Assistant auto-discovers the proxy once the node is flashed and the Bluetooth integration is set up.
+
 ## How it works
 
 The smoker uses an undocumented two-round challenge/response over a plain, unencrypted BLE GATT link.
